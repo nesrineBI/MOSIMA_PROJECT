@@ -1,0 +1,415 @@
+;; =================================================================
+;; GO PROCEDURES
+;; =================================================================
+
+
+; Run a sole simulation. Keep calling it if you want several tick to be run.
+to go_simulation
+  set employed_fired_this_turn 0
+  ask persons[
+    go_one_person 
+  ]
+  ask companies[
+    go_one_company
+  ]  
+  ask matchings [
+    go_one_matching
+  ]
+  
+  
+  init_links
+  init_color
+  go_globals
+  
+  tick
+end
+
+
+; Dynamic simulation of a single agent person. -----------------------------------------------------------------------
+; It will first try to find a job.
+to go_one_person
+  
+  ifelse not haveJob [                             ; if the agent person has no job
+    
+    
+    
+    ask matching matchingAgentWhoNumber [      ; it asks for one to the matching agent
+      ifelse (Activate_optimized_matching_ = true)[ ; HERE IF WE USE OPTIMIZED MATCHING
+        
+          if not member? ([who] of myself) seekP [ ; which check first if the agent person is already in its list
+            set seekP lput ([who] of myself) seekP ; and eventually add it to it.
+          ]  
+        
+      ]
+      [
+        if not member? ([who] of myself) seekP [ ; which check first if the agent person is already in its list
+          set seekP lput ([who] of myself) seekP ; and eventually add it to it.
+        ] 
+      ] 
+      
+    ]
+    set time_unemployed time_unemployed + 1    ; At each tick we keep track of the time the agent person was unemployed
+  ]
+  [
+    if (Optimized_resignation_ = true) [
+      
+
+      optimized_resign    ; for the resignation extention du modéle question 2.1
+    ]
+
+  ]
+  if (Activate_reconversion_ = true) [ ; for the perspective
+    reconversion_person
+  ]
+  
+  
+  
+  
+  
+end
+
+
+; Dynamic simulation of a single agent company. -----------------------------------------------------------------------
+; It will either try to find a job, or try to fire its employee.
+to go_one_company
+  
+  ifelse not haveEmployee [                    ; If the agent company has no job
+    ask matching matchingAgentWhoNumber [      ; it asks for one to the matching agent,
+      if not member? ([who] of myself) seekC [ ; which check first if the agent person is already in its list
+        set seekC lput ([who] of myself) seekC ; and eventually add it to it.
+      ]
+    ]
+  ]
+  [                                                   ; if the agent company already has an amployee it will verify its productivity
+    let bad_productivity ((productivity skills ([skills] of employee)) < firing_quality_threshold) ; and fire him if it is unsufficent
+    let bad_luck (random-float 1 < unexpected_firing) ; and has also a given chance to unexpectedly fire it.
+    if (bad_productivity or bad_luck) [
+      fire_employee(employee)
+    ]
+  ]
+  if (Activate_reconversion_ = true) [ ; for the perspective
+    reconversion_company
+  ]
+  
+  
+  
+end
+
+; Dynamic simulation of a single agent matching. -----------------------------------------------------------------------
+; It will try to match a restricted number of agent person and agent company.
+to go_one_matching
+  
+  ; At the begining of this tick, the statistic are reset to zero.
+  set people_matched_this_turn 0
+  set structural_unemployement 0
+  set frictional_unemployement_rate 0
+  set frictional_unemployement_time 0
+  
+  
+  ;HERE THE APPENDICE A
+  let n_treated 0
+  
+  
+    set n_treated (min (List (length seekP) (length seekC) n_match)) ; It first determines the exact number (n_treated) of agents processed
+                                                                   ;       (it is the minimum number between the matching agent capacity (n_match) and the lists of candidats)
+  let unemployed_treated n-of n_treated (shuffle seekP)            ; then it selects some agents in each lists (seekP and seekC)
+  let recruitors_treated n-of n_treated (shuffle seekC)            ; and makes sure that they are ordered randomly (shuffle)
+  
+  foreach (n-values n_treated [ n -> n ] )[x ->                               ; Exactly "n_treated" pairs will now we tested.
+    
+    let a_person_number (item x unemployed_treated)                ; To avoid unecessary (and onerous) manipulation of agent list we refer to them through their number
+    let a_company_number (item x recruitors_treated) 
+    let a_person (person a_person_number)                          ; and we directly use it to manipulate the agent person and the agent company.
+    let a_company (company a_company_number) 
+    
+    
+    let simi_person 0
+    let simi_company 0
+    
+    ; HERE IF WE USE OPTIMIZED MATCHING
+    ifelse (Activate_optimized_matching_ = true)[
+      
+      set simi_person (optimized_similarity_person_to_company a_person a_company)  ; The similarity between an agent person and an agent company is computed
+      set simi_company (optimized_similarity_company_to_person a_company a_person) ; as well as between a company and a person 
+    ]
+    [
+      
+      set simi_person (similarity_person_to_company a_person a_company)  ; The similarity between an agent person and an agent company is computed
+      set simi_company (similarity_company_to_person a_company a_person) ; as well as between a company and a person 
+    ]
+    
+   
+    
+     
+    
+    
+    let close_enough ((abs (simi_person - simi_company)) <= exceptional_matching)      ; Then it assess that their similiratiies are on the same scale
+    let good_enough ( (simi_person + simi_company) / 2 >= matching_quality_threshold ) ; and if they are similar enough to be matched
+    
+    ifelse (close_enough and good_enough) [                             ; If the two conditions above are met, the matching occurs.
+      ask a_company [hire_employee a_person]                            ;    The agent company employ the agent person
+      set seekP (remove-item (position a_person_number seekP) seekP)    ;    and both agent are withdraw from the lists
+      set seekC (remove-item (position a_company_number seekC) seekC) 
+    ]
+    [                                                                   ; Otherwise, the matching fail
+      set structural_unemployement structural_unemployement + 1         ;   in this case we update the "structural_unemployement" counter
+    ]
+  ]
+end
+
+
+; Updates the statistic of the simulation
+to go_globals
+  
+  let working_force count persons with [haveJob]                                         ; The number of employed agents person
+
+  set unemployment_level count persons with [not haveJob]                                ; The number of unemployed agents person 
+  
+  set labor_force (working_force + unemployment_level)                                   ; The number of agents person having or looking for a job
+  if labor_force != 0[
+    set unemployment_rate ( unemployment_level /   labor_force)                         ; The proportion of non-working agents person
+  ]
+  set vacant_jobs count companies with [not haveEmployee]                                ; The number of vacant jobs
+  if labor_force != 0 [
+    set vacancy_rate (vacant_jobs / labor_force)                                         ; The proportion of unoccupied jobs 
+  ] 
+  if Person_Number != 0 [
+    set participation_rate ( labor_force / Person_Number)                                ; The proportion of people engaged in a job or in job seeking
+  ]
+  set natural_unemployement ( frictional_unemployement_rate  + structural_unemployement) ; Global unemployement level 
+  
+  if unemployment_level != 0 [
+    set hiring_rate (people_matched_this_turn / (unemployment_level + people_matched_this_turn))
+    
+  ] 
+    
+  if labor_force != 0 and labor_force - unemployment_level != 0 [
+    set firing_rate (employed_fired_this_turn / (working_force + employed_fired_this_turn) )
+   
+  ]                                                                                      ; Here we store the unemployed rate and the vacancy rate over several ticks in a "sliding window" fashion
+  ifelse (time_window <= 0 or ticks < time_window) [                                     ; When not enough values are strored, it keep storing them
+    set unemployement_rate_list lput unemployment_rate unemployement_rate_list
+    set vacancy_rate_list lput vacancy_rate vacancy_rate_list
+  ]
+  [                                                                                      ; But when enough of them are present, the first one progressively replace by the previous while new values arrive
+    set unemployement_rate_list lput unemployment_rate but-first unemployement_rate_list
+    set vacancy_rate_list lput vacancy_rate but-first  vacancy_rate_list
+  ]
+  
+  
+   ;; keep the 20 last measures
+  ifelse (ticks > 20) [
+    
+    set vacancy_array lput (vacant_jobs / labor_force) but-first vacancy_array
+    set unemployement_array  lput (unemployment_level / Labor_force) but-first unemployement_array
+    ifelse(working_force + employed_fired_this_turn != 0 )
+    [set firing_array lput (employed_fired_this_turn / (working_force + employed_fired_this_turn)) but-first firing_array]
+    [set firing_array lput 0.0001 but-first firing_array ]
+    set hiring_array lput (people_matched_this_turn / (unemployment_level + people_matched_this_turn)) but-first hiring_array
+    
+    ;set happiness_worker_array lput persons_happiness but-first happiness_worker_array
+    ;set happiness_companies_array lput companies_happiness but-first happiness_companies_array
+  ]
+  
+  [
+  
+  ;; for the differents plots
+ set unemployement_array  lput ( unemployment_level / Labor_force) unemployement_array
+    
+ set vacancy_array lput ( vacant_jobs / labor_force)  vacancy_array
+ ifelse(working_force + employed_fired_this_turn != 0 )
+    [set firing_array lput ( employed_fired_this_turn / (working_force + employed_fired_this_turn)) firing_array]
+    [set firing_array lput 0.0001 firing_array]
+     
+    
+ set hiring_array lput (people_matched_this_turn / (unemployment_level + people_matched_this_turn)) hiring_array
+
+ 
+ 
+  ]
+  
+end
+
+to go_simulations
+  
+  set index_go 0
+  set update_plot false
+  let value_param_1 0
+  let value_param_2 0
+  let value_param_3 0
+  
+  set unemployement_array_beveridge []
+  set vacancy_array_beveridge []
+  set hiring_array_beveridge []
+  set firing_array_beveridge []
+ 
+  
+  foreach (n-values (max list 1 length range_param_3) [ n -> n ] )[ x ->            ; The third parameter is updated in the first loop for clarity purpose at the drawing time    
+    if length range_param_3 > 0 [      
+      set value_param_3 (item x range_param_3)
+    ]
+    
+    set UnemployedRateList_simulations []                               ; New lists are used to store results with each value of the third parameter
+    set UnemployedRateList_simulations []
+    
+    foreach (n-values (max list 1 length range_param_1) [ n -> n ])[ y -> 
+      if length range_param_1 > 0 [
+        set value_param_1 (item y range_param_1)
+      ]
+      foreach (n-values (max list 1 length range_param_2) [ n -> n ])[ z -> 
+        if length range_param_2 > 0 [
+          set value_param_2 (item z range_param_2)
+        ]
+        
+        print "===================================================================="   
+        if sensibility_parameter_1 != "NOTHING" [
+          print (word "The value of (" sensibility_parameter_1 ") will be " value_param_1)        
+        ]
+        if sensibility_parameter_2 != "NOTHING" [
+          print (word "The value of (" sensibility_parameter_2 ") will be " value_param_2)        
+        ]
+        if sensibility_parameter_3 != "NOTHING" [
+          print (word "The value of (" sensibility_parameter_3 ") will be " value_param_3)        
+        ]
+        
+        
+   
+                                                          ; Accumulators to compute average moving means
+        let vac_rate 0                                    ; vacancy rate
+        let unem_rate 0                                   ; unemployement rate
+        
+        
+                                                          ;for sensibility of parameters
+        let happy_work 0                                  ; 
+        let happy_comp 0
+        let long_unemp 0
+        let short_unemp 0 
+        let short_vac 0    
+        let short_hiring 0
+        let short_firing 0
+       
+        foreach (n-values n_sub_simu [ n -> n ]) [ s -> ; simulations will be repeated "n_sub_simu" times with different random seed       
+          
+          
+          ask turtles [die]  
+          set Rseed s 
+          
+          if sensibility_parameter_1 != "NOTHING" [
+            match_sensibility_name_variable sensibility_parameter_1 value_param_1
+          ]
+          if sensibility_parameter_2 != "NOTHING" [
+            match_sensibility_name_variable sensibility_parameter_2 value_param_2
+          ]
+          if sensibility_parameter_3 != "NOTHING" [
+            match_sensibility_name_variable sensibility_parameter_3 value_param_3
+          ]
+          
+          setup_simulation
+          
+          
+          
+          while [ticks < n_ticks_max and not hasConverged_Vacancy_and_unemployement] [ ; The simulation will stop either if it has converged or run for too long
+            
+            go_simulation 
+            
+            if (stop_simulations?) [  
+              stop
+            ]
+          ]                                                          ; the simulation is stopped
+          
+          set vac_rate (vac_rate + (mean vacancy_rate_list))                           ; Moving mean are accumulated
+          set unem_rate (unem_rate + (mean unemployement_rate_list))
+          
+          
+          ;set happy_work happy_work + (mean happiness_worker_array)
+          ;set happy_comp happy_comp + (mean happiness_companies_array)
+          ;set long_unemp long_unemp + (mean long_unemployement_array)
+          set short_unemp short_unemp + (mean unemployement_array)
+          set short_vac short_vac + (mean vacancy_array)
+          set short_hiring short_hiring + (mean hiring_array) 
+          set short_firing short_firing + (mean firing_array) 
+        ]
+        ; True mean (over the "n_sub_simu" are now computed and stored
+        set VacancyRateList_simulations lput (vac_rate / n_sub_simu) VacancyRateList_simulations
+        set UnemployedRateList_simulations lput (unem_rate / n_sub_simu) UnemployedRateList_simulations
+        
+        set unemployement_array_beveridge lput( short_unemp / n_sub_simu) unemployement_array_beveridge
+        set vacancy_array_beveridge lput( short_vac / n_sub_simu) vacancy_array_beveridge
+        set hiring_array_beveridge lput( short_hiring / n_sub_simu) hiring_array_beveridge
+        set firing_array_beveridge lput( short_firing / n_sub_simu) firing_array_beveridge
+       
+       
+        
+        show_sensitivity value_param_3 value_param_1 value_param_2
+      ] ; end of the param_2 loop
+      
+    ] ; end of the param_1 loop
+    
+     set index_go (index_go + 1)
+     set update_plot true 
+    
+     set unemployement_array_parameter lput ((mean unemployement_array_beveridge) / (length range_param_1 + length range_param_2)) unemployement_array_parameter
+     set vacancy_array_parameter lput ((mean vacancy_array_beveridge) / (length range_param_1 + length range_param_2)) vacancy_array_parameter
+     set hiring_array_parameter lput ((mean hiring_array_beveridge) / (length range_param_1 + length range_param_2)) hiring_array_parameter
+     set firing_array_parameter lput ((mean firing_array_beveridge) / (length range_param_1 + length range_param_2)) firing_array_parameter
+     
+    
+  ] ; end of the param_3 loop
+end
+
+; si la PERSONS cherche un job ou pas
+to-report seekJob?
+  let rand (random-float 1)
+  ifelse (rand < ( 1 / 2 ))[ ; une chance de 1/(1 - s) de ne pas chercher de job à ce tour ci
+      report false  ; non , on ne cherche pas de job
+  ]
+  [
+    report true ; oui , on cherche un job
+  ] 
+end
+
+to-report M_value
+  go_globals
+  set vacant_jobs count companies with [not haveEmployee] 
+  let U count persons with [not haveJob]  
+  ifelse (vacant_jobs  != 0)[
+    set M   vacant_jobs  * (1 - e ^ (- 1 * 0 * U / vacant_jobs ))
+  ]
+  [
+    set M 10
+  ]
+  report M
+end
+
+; Check the convergence (in a less than "epsilon" distance from the moving mean) of the vacancy and unemployement rate
+to-report hasConverged_Vacancy_and_unemployement 
+  ifelse (ticks > time_window)   
+  [
+    ; Moving mean are computed to be compared to
+    let vac_mean mean vacancy_rate_list  
+    let unemp_mean mean unemployement_rate_list
+    let canConverge True
+    let index 0
+    
+    ; Then all the stored value are check
+    while [canConverge and index < time_window] ; As soon as one of them if farer than epsilon from the mean, the convergence is lost
+    [
+      let conv_vac ((abs (item index vacancy_rate_list) - vac_mean) < epsilon)           ; Both distance from the vacancy rate mean
+      let conv_unemp ((abs (item index unemployement_rate_list) - unemp_mean) < epsilon) ; and the unemployement rate mean are checked
+      
+      set canConverge (conv_vac and conv_unemp)
+      set index (index + 1)
+    ] 
+    report canConverge
+  ]
+  [
+    report False
+  ]    
+end
+
+
+
+
+
+
+
